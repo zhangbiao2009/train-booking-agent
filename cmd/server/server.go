@@ -1,13 +1,70 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
+
+// ResponseWriter wrapper to capture response data
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	body       *bytes.Buffer
+}
+
+func newResponseWriter(w http.ResponseWriter) *responseWriter {
+	return &responseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK,
+		body:           &bytes.Buffer{},
+	}
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	rw.body.Write(b)
+	return rw.ResponseWriter.Write(b)
+}
+
+// Logging middleware
+func loggingMiddleware(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Log incoming request
+		log.Printf("📥 [REQUEST] %s %s from %s", r.Method, r.URL.String(), r.RemoteAddr)
+		if r.URL.RawQuery != "" {
+			log.Printf("📋 [PARAMS] %s", r.URL.RawQuery)
+		}
+
+		// Wrap response writer to capture response
+		rw := newResponseWriter(w)
+
+		// Call the handler
+		handler(rw, r)
+
+		// Log response
+		duration := time.Since(start)
+		status := rw.statusCode
+		responseBody := rw.body.String()
+
+		if status >= 200 && status < 300 {
+			log.Printf("✅ [RESPONSE] %d - %v - Body: %s", status, duration, responseBody)
+		} else {
+			log.Printf("❌ [RESPONSE] %d - %v - Error: %s", status, duration, responseBody)
+		}
+	}
+}
 
 // Train structure
 type Train struct {
@@ -37,11 +94,11 @@ func main() {
 	trains["D201"] = &Train{"D201", "Guangzhou", "Shenzhen", "2025-06-02", "09:15", "10:45", 80, 75}
 	trains["G102"] = &Train{"G102", "Shanghai", "Beijing", "2025-06-01", "14:00", "19:30", 100, 88}
 
-	http.HandleFunc("/query", handleQuery)
-	http.HandleFunc("/book", handleBook)
-	http.HandleFunc("/cancel", handleCancel)
-	http.HandleFunc("/list", handleList)
-	http.HandleFunc("/tickets", handleTickets)
+	http.HandleFunc("/query", loggingMiddleware(handleQuery))
+	http.HandleFunc("/book", loggingMiddleware(handleBook))
+	http.HandleFunc("/cancel", loggingMiddleware(handleCancel))
+	http.HandleFunc("/list", loggingMiddleware(handleList))
+	http.HandleFunc("/tickets", loggingMiddleware(handleTickets))
 	fmt.Println(":bullettrain_side: Ticket server is running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
