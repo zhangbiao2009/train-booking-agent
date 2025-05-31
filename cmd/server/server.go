@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// 车次结构体
+// Train structure
 type Train struct {
 	ID           string `json:"id"`
 	From         string `json:"from"`
@@ -17,14 +17,14 @@ type Train struct {
 	Available    int    `json:"available"`
 }
 
-// 车票信息用 map 保存
+// Train ticket information stored in map
 var (
 	trains = map[string]*Train{}
-	mu     sync.Mutex // 并发保护
+	mu     sync.Mutex // Concurrency protection
 )
 
 func main() {
-	// 初始化一些车次
+	// Initialize some train routes
 	trains["G100"] = &Train{"G100", "Beijing", "Shanghai", 100, 100}
 	trains["D200"] = &Train{"D200", "Guangzhou", "Shenzhen", 80, 80}
 	trains["K300"] = &Train{"K300", "Chengdu", "Xi'an", 50, 3}
