@@ -123,8 +123,15 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 func handleBook(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	userID := r.URL.Query().Get("user_id")
+
+	// Validate required parameters
 	if userID == "" {
-		userID = "default" // Default user ID if not provided
+		http.Error(w, "user_id parameter is required", http.StatusBadRequest)
+		return
+	}
+	if id == "" {
+		http.Error(w, "id parameter is required", http.StatusBadRequest)
+		return
 	}
 
 	mu.Lock()
@@ -155,8 +162,15 @@ func handleBook(w http.ResponseWriter, r *http.Request) {
 func handleCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	userID := r.URL.Query().Get("user_id")
+
+	// Validate required parameters
 	if userID == "" {
-		userID = "default" // Default user ID if not provided
+		http.Error(w, "user_id parameter is required", http.StatusBadRequest)
+		return
+	}
+	if id == "" {
+		http.Error(w, "id parameter is required", http.StatusBadRequest)
+		return
 	}
 
 	mu.Lock()
@@ -240,8 +254,11 @@ func handleTickets(w http.ResponseWriter, r *http.Request) {
 
 func handleUserTickets(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
+
+	// Validate required parameter
 	if userID == "" {
-		userID = "default" // Default user ID if not provided
+		http.Error(w, "user_id parameter is required", http.StatusBadRequest)
+		return
 	}
 
 	mu.Lock()
