@@ -35,6 +35,7 @@ type Train struct {
 	ID            string `json:"id"`
 	From          string `json:"from"`
 	To            string `json:"to"`
+	Date          string `json:"date"`
 	DepartureTime string `json:"departure_time"`
 	ArrivalTime   string `json:"arrival_time"`
 	TotalTickets  int    `json:"total_tickets"`
@@ -75,35 +76,26 @@ func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
 
 // Call DeepSeek API to understand user intent
 func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
-	// Fetch current train information dynamically
-	trains, err := a.fetchAvailableTrains()
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch train information: %v", err)
-	}
-
-	// Build train list for system prompt
-	trainList := "Available trains with departure/arrival times:\n"
-	for _, train := range trains {
-		trainList += fmt.Sprintf("- %s: %s-%s (%s-%s)\n",
-			train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime)
-	}
-
-	systemPrompt := fmt.Sprintf(`You are a train booking assistant. Analyze the user's request and respond with ONLY ONE of these actions:
+	systemPrompt := `You are a train booking assistant. Analyze the user's request and respond with ONLY ONE of these actions:
 
 1. For querying train info: "QUERY:train_id" (e.g., "QUERY:G100")
 2. For booking tickets: "BOOK:train_id" (e.g., "BOOK:G100") 
 3. For canceling tickets: "CANCEL:train_id" (e.g., "CANCEL:G100")
 4. For listing available trains: "LIST"
-5. If unclear: "CLARIFY:question to ask user"
+5. For searching tickets by route/date: "SEARCH:from:to:date" (e.g., "SEARCH:Beijing:Shanghai:2025-06-01")
+6. If unclear: "CLARIFY:question to ask user"
 
-%s
 Examples:
 - "Check G100 train" → "QUERY:G100"
 - "Book a ticket for D200" → "BOOK:D200"
 - "Cancel my K300 booking" → "CANCEL:K300"
 - "What trains are available?" → "LIST"
+- "Show me all trains" → "LIST"
+- "Find trains from Beijing to Shanghai" → "SEARCH:Beijing:Shanghai:"
+- "Trains from Beijing to Shanghai on June 1st" → "SEARCH:Beijing:Shanghai:2025-06-01"
+- "Any trains to Shanghai?" → "SEARCH::Shanghai:"
 
-Respond with ONLY the action, no explanation.`, trainList)
+Respond with ONLY the action, no explanation.`
 
 	req := ChatRequest{
 		Model: "deepseek-chat",
@@ -172,13 +164,15 @@ func (a *BookingAgent) executeAction(action string) string {
 		return a.cancelTicket(trainID)
 	case "LIST":
 		return a.listTrains()
+	case "SEARCH":
+		return a.searchTickets(parts[1:]) // Pass remaining parts for from:to:date
 	case "CLARIFY":
 		if len(parts) > 1 {
 			return "🤔 " + parts[1]
 		}
 		return "🤔 Could you please clarify your request?"
 	default:
-		return "❌ I don't understand that action. Please try asking to query, book, or cancel a train ticket."
+		return "❌ I don't understand that action. Please try asking to query, book, cancel, search for trains, or list all trains."
 	}
 }
 
@@ -206,8 +200,8 @@ func (a *BookingAgent) queryTrain(trainID string) string {
 		return fmt.Sprintf("❌ Error decoding response: %v", err)
 	}
 
-	return fmt.Sprintf("🚄 Train %s\n📍 Route: %s → %s\n🕐 Departure: %s | Arrival: %s\n🎫 Available: %d/%d tickets",
-		train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
+	return fmt.Sprintf("🚄 Train %s\n📍 Route: %s → %s\n📅 Date: %s\n🕐 Departure: %s | Arrival: %s\n🎫 Available: %d/%d tickets",
+		train.ID, train.From, train.To, train.Date, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
 }
 
 func (a *BookingAgent) bookTicket(trainID string) string {
@@ -274,8 +268,80 @@ func (a *BookingAgent) listTrains() string {
 
 	result := "🚄 Available Trains:\n"
 	for _, train := range trains {
-		result += fmt.Sprintf("• %s: %s → %s | %s-%s (%d/%d available)\n",
-			train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
+		result += fmt.Sprintf("• %s: %s → %s | %s | %s-%s (%d/%d available)\n",
+			train.ID, train.From, train.To, train.Date, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
+	}
+
+	return result
+}
+
+func (a *BookingAgent) searchTickets(params []string) string {
+	// Parse search parameters: from, to, date
+	var from, to, date string
+	if len(params) > 0 {
+		from = params[0]
+	}
+	if len(params) > 1 {
+		to = params[1]
+	}
+	if len(params) > 2 {
+		date = params[2]
+	}
+
+	// Build query string
+	var queryParams []string
+	if from != "" {
+		queryParams = append(queryParams, fmt.Sprintf("from=%s", from))
+	}
+	if to != "" {
+		queryParams = append(queryParams, fmt.Sprintf("to=%s", to))
+	}
+	if date != "" {
+		queryParams = append(queryParams, fmt.Sprintf("date=%s", date))
+	}
+
+	queryString := ""
+	if len(queryParams) > 0 {
+		queryString = "?" + strings.Join(queryParams, "&")
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/tickets%s", a.serverURL, queryString))
+	if err != nil {
+		return fmt.Sprintf("❌ Error searching tickets: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Sprintf("❌ Error: %s", resp.Status)
+	}
+
+	var trains []Train
+	if err := json.NewDecoder(resp.Body).Decode(&trains); err != nil {
+		return fmt.Sprintf("❌ Error decoding response: %v", err)
+	}
+
+	if len(trains) == 0 {
+		searchCriteria := []string{}
+		if from != "" {
+			searchCriteria = append(searchCriteria, fmt.Sprintf("from %s", from))
+		}
+		if to != "" {
+			searchCriteria = append(searchCriteria, fmt.Sprintf("to %s", to))
+		}
+		if date != "" {
+			searchCriteria = append(searchCriteria, fmt.Sprintf("on %s", date))
+		}
+		criteriaText := strings.Join(searchCriteria, " ")
+		if criteriaText == "" {
+			criteriaText = "matching your criteria"
+		}
+		return fmt.Sprintf("❌ No trains found %s", criteriaText)
+	}
+
+	result := "🔍 Search Results:\n"
+	for _, train := range trains {
+		result += fmt.Sprintf("• %s: %s → %s | %s | %s-%s (%d/%d available)\n",
+			train.ID, train.From, train.To, train.Date, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
 	}
 
 	return result

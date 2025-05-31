@@ -5,10 +5,11 @@ A conversational AI agent powered by DeepSeek API that helps users book, query, 
 ## Features
 
 - 🤖 Natural language processing using DeepSeek API
-- 🚄 Query train information
+- 🚄 Query train information with departure/arrival times and dates
 - 🎫 Book train tickets
 - ❌ Cancel bookings
 - 📋 List available trains
+- 🔍 Search trains by route, date, or combination of criteria
 
 ## Setup
 
@@ -55,11 +56,35 @@ Once the agent is running, you can interact with it using natural language:
 - "Show me all trains"
 - "List available trains"
 
+### Search Trains
+- "Find trains from Beijing to Shanghai"
+- "Show me trains from Beijing to Shanghai on June 1st"
+- "Any trains to Shanghai?"
+- "Trains on June 2nd"
+- "Find trains from Guangzhou"
+
 ## Available Trains
 
-- **G100**: Beijing → Shanghai | Depart: 08:00, Arrive: 13:30 (100 seats)
-- **D200**: Guangzhou → Shenzhen | Depart: 09:15, Arrive: 10:45 (80 seats)  
-- **K300**: Chengdu → Xi'an | Depart: 18:20, Arrive: 07:40+1 (50 seats)
+Current trains with dates and times:
+
+### June 1st, 2025 (2025-06-01)
+- **G100**: Beijing → Shanghai | 08:00-13:30 (100 seats)
+- **D200**: Guangzhou → Shenzhen | 09:15-10:45 (80 seats)  
+- **K300**: Chengdu → Xi'an | 18:20-07:40+1 (50 seats)
+- **G102**: Shanghai → Beijing | 14:00-19:30 (100 seats)
+
+### June 2nd, 2025 (2025-06-02)
+- **G101**: Beijing → Shanghai | 08:00-13:30 (100 seats)
+- **D201**: Guangzhou → Shenzhen | 09:15-10:45 (80 seats)
+
+## API Endpoints
+
+### Server Endpoints
+- `GET /query?id={train_id}` - Get specific train information
+- `GET /book?id={train_id}` - Book a ticket for a train
+- `GET /cancel?id={train_id}` - Cancel a ticket booking
+- `GET /list` - List all available trains (with tickets > 0)
+- `GET /tickets?from={city}&to={city}&date={YYYY-MM-DD}` - Search trains by criteria
 
 ## Architecture
 
