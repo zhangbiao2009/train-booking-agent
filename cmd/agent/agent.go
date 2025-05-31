@@ -32,11 +32,13 @@ type Choice struct {
 
 // Train booking structures
 type Train struct {
-	ID           string `json:"id"`
-	From         string `json:"from"`
-	To           string `json:"to"`
-	TotalTickets int    `json:"total_tickets"`
-	Available    int    `json:"available"`
+	ID            string `json:"id"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	DepartureTime string `json:"departure_time"`
+	ArrivalTime   string `json:"arrival_time"`
+	TotalTickets  int    `json:"total_tickets"`
+	Available     int    `json:"available"`
 }
 
 type BookingAgent struct {
@@ -61,7 +63,10 @@ func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
 4. For listing available trains: "LIST"
 5. If unclear: "CLARIFY:question to ask user"
 
-Available trains: G100 (Beijing-Shanghai), D200 (Guangzhou-Shenzhen), K300 (Chengdu-Xi'an)
+Available trains with departure/arrival times:
+- G100: Beijing-Shanghai (08:00-13:30)
+- D200: Guangzhou-Shenzhen (09:15-10:45) 
+- K300: Chengdu-Xi'an (18:20-07:40)
 
 Examples:
 - "Check G100 train" → "QUERY:G100"
@@ -172,8 +177,8 @@ func (a *BookingAgent) queryTrain(trainID string) string {
 		return fmt.Sprintf("❌ Error decoding response: %v", err)
 	}
 
-	return fmt.Sprintf("🚄 Train %s\n📍 Route: %s → %s\n🎫 Available: %d/%d tickets",
-		train.ID, train.From, train.To, train.Available, train.TotalTickets)
+	return fmt.Sprintf("🚄 Train %s\n📍 Route: %s → %s\n🕐 Departure: %s | Arrival: %s\n🎫 Available: %d/%d tickets",
+		train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
 }
 
 func (a *BookingAgent) bookTicket(trainID string) string {
@@ -242,8 +247,8 @@ func (a *BookingAgent) listTrains() string {
 		if resp.StatusCode == http.StatusOK {
 			var train Train
 			if json.NewDecoder(resp.Body).Decode(&train) == nil {
-				result += fmt.Sprintf("• %s: %s → %s (%d/%d available)\n",
-					train.ID, train.From, train.To, train.Available, train.TotalTickets)
+				result += fmt.Sprintf("• %s: %s → %s | %s-%s (%d/%d available)\n",
+					train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
 			}
 		}
 	}

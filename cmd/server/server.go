@@ -10,11 +10,13 @@ import (
 
 // Train structure
 type Train struct {
-	ID           string `json:"id"`
-	From         string `json:"from"`
-	To           string `json:"to"`
-	TotalTickets int    `json:"total_tickets"`
-	Available    int    `json:"available"`
+	ID            string `json:"id"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	DepartureTime string `json:"departure_time"`
+	ArrivalTime   string `json:"arrival_time"`
+	TotalTickets  int    `json:"total_tickets"`
+	Available     int    `json:"available"`
 }
 
 // Train ticket information stored in map
@@ -25,9 +27,9 @@ var (
 
 func main() {
 	// Initialize some train routes
-	trains["G100"] = &Train{"G100", "Beijing", "Shanghai", 100, 100}
-	trains["D200"] = &Train{"D200", "Guangzhou", "Shenzhen", 80, 80}
-	trains["K300"] = &Train{"K300", "Chengdu", "Xi'an", 50, 3}
+	trains["G100"] = &Train{"G100", "Beijing", "Shanghai", "08:00", "13:30", 100, 100}
+	trains["D200"] = &Train{"D200", "Guangzhou", "Shenzhen", "09:15", "10:45", 80, 80}
+	trains["K300"] = &Train{"K300", "Chengdu", "Xi'an", "18:20", "07:40", 50, 3}
 	http.HandleFunc("/query", handleQuery)
 	http.HandleFunc("/book", handleBook)
 	http.HandleFunc("/cancel", handleCancel)

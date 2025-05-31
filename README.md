@@ -57,9 +57,9 @@ Once the agent is running, you can interact with it using natural language:
 
 ## Available Trains
 
-- **G100**: Beijing → Shanghai (100 seats)
-- **D200**: Guangzhou → Shenzhen (80 seats)  
-- **K300**: Chengdu → Xi'an (50 seats)
+- **G100**: Beijing → Shanghai | Depart: 08:00, Arrive: 13:30 (100 seats)
+- **D200**: Guangzhou → Shenzhen | Depart: 09:15, Arrive: 10:45 (80 seats)  
+- **K300**: Chengdu → Xi'an | Depart: 18:20, Arrive: 07:40+1 (50 seats)
 
 ## Architecture
 
