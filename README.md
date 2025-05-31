@@ -1,6 +1,6 @@
 # Train Booking Agent
 
-A conversational AI agent powered by DeepSeek API that helps users book, query, and cancel train tickets.
+**An experimental conversational AI agent** powered by DeepSeek API that helps users book, query, and cancel train tickets.
 
 ## Features
 
