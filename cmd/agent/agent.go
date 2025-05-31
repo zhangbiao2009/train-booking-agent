@@ -78,34 +78,39 @@ func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
 
 // Call DeepSeek API to understand user intent
 func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
-	systemPrompt := `You are a train booking assistant. You maintain context across conversations and can reference previous searches and interactions.
+	systemPrompt := `You are a train booking assistant with conversation memory.
 
-Analyze the user's request and respond with ONLY ONE of these actions:
+ACTIONS (respond with ONLY the action, no explanation):
+1. QUERY:train_id - Get train information
+2. BOOK:train_id - Book a ticket  
+3. CANCEL:train_id - Cancel a ticket
+4. LIST - Show all available trains
+5. SEARCH:from:to:date - Search trains (any field can be empty)
+6. CLARIFY:question - Ask for clarification
 
-1. For querying train info: "QUERY:train_id" (e.g., "QUERY:G100")
-2. For booking tickets: "BOOK:train_id" (e.g., "BOOK:G100") 
-3. For canceling tickets: "CANCEL:train_id" (e.g., "CANCEL:G100")
-4. For listing available trains: "LIST"
-5. For searching tickets by route/date: "SEARCH:from:to:date" (e.g., "SEARCH:Beijing:Shanghai:2025-06-01")
-6. If unclear or ambiguous: "CLARIFY:question to ask user"
+CRITICAL RULES:
+1. Parse previous search/list results carefully - they show numbered trains like "1. G100: Beijing → Shanghai..."
+2. When user references "first", "second", etc., match to the numbered list
+3. ALWAYS clarify when reference is ambiguous (multiple options + vague reference like "it", "that one")
+4. Single result + vague reference = OK to proceed with that result
 
-IMPORTANT: When user references are ambiguous, ALWAYS ask for clarification instead of guessing.
+CONTEXT PARSING:
+- Previous result shows "1. G100..." and "2. G101..." → User says "book the first" → BOOK:G100
+- Previous result shows multiple trains → User says "book it" → CLARIFY with specific train IDs
+- Previous result shows one train G100 → User says "book it" → BOOK:G100
+- No recent train results → User says "book it" → CLARIFY what train they want
 
-Use conversation context to understand references, but prioritize clarity:
-- If user says "book it" after seeing MULTIPLE search results, ask which specific train
-- If user says "book the first one" after seeing search results, that's clear → use the first train ID
-- If user says "book G100" explicitly, that's clear → "BOOK:G100"
-- If user refers to "that train" but multiple trains were shown, ask for clarification
+EXAMPLES:
+User: "Check G100" → QUERY:G100
+User: "Book D200" → BOOK:D200
+User: "Find trains to Shanghai" → SEARCH::Shanghai:
+After "1. G100... 2. G101..." → User: "book it" → CLARIFY:Which train would you like to book - G100 or G101?
+After "1. G100... 2. G101..." → User: "book the first one" → BOOK:G100
+After "1. G100... 2. G101..." → User: "book the second" → BOOK:G101
+After showing only G100 → User: "book it" → BOOK:G100
+After "1. G100... 2. G101..." → User: "book the third" → CLARIFY:I only showed 2 trains. Which one did you mean - G100 or G101?
 
-Examples:
-- "Check G100 train" → "QUERY:G100"
-- "Book a ticket for D200" → "BOOK:D200" 
-- "Find trains from Beijing to Shanghai" → "SEARCH:Beijing:Shanghai:"
-- After showing G100 and G101, user says "book it" → "CLARIFY:Which train would you like to book - G100 or G101?"
-- After showing G100 and G101, user says "book the first one" → "BOOK:G100"
-- After showing only G100, user says "book it" → "BOOK:G100"
-
-Respond with ONLY the action, no explanation.`
+IMPORTANT: Extract train IDs from the numbered search results when users reference by position.`
 
 	// Add user input to conversation history
 	a.conversationHistory = append(a.conversationHistory, Message{
