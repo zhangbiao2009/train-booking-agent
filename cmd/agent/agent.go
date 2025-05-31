@@ -87,19 +87,23 @@ Analyze the user's request and respond with ONLY ONE of these actions:
 3. For canceling tickets: "CANCEL:train_id" (e.g., "CANCEL:G100")
 4. For listing available trains: "LIST"
 5. For searching tickets by route/date: "SEARCH:from:to:date" (e.g., "SEARCH:Beijing:Shanghai:2025-06-01")
-6. If unclear: "CLARIFY:question to ask user"
+6. If unclear or ambiguous: "CLARIFY:question to ask user"
 
-Use conversation context to understand references:
-- If user says "book the first one" after seeing search results, extract the train ID from previous response
-- If user says "book G100" after seeing it in results, use "BOOK:G100"
-- If user refers to "that train" or "the second train", find the specific train ID from context
+IMPORTANT: When user references are ambiguous, ALWAYS ask for clarification instead of guessing.
+
+Use conversation context to understand references, but prioritize clarity:
+- If user says "book it" after seeing MULTIPLE search results, ask which specific train
+- If user says "book the first one" after seeing search results, that's clear → use the first train ID
+- If user says "book G100" explicitly, that's clear → "BOOK:G100"
+- If user refers to "that train" but multiple trains were shown, ask for clarification
 
 Examples:
 - "Check G100 train" → "QUERY:G100"
 - "Book a ticket for D200" → "BOOK:D200" 
 - "Find trains from Beijing to Shanghai" → "SEARCH:Beijing:Shanghai:"
-- After showing "G100: Beijing → Shanghai", user says "book it" → "BOOK:G100"
-- After showing search results with G100 first, user says "book the first" → "BOOK:G100"
+- After showing G100 and G101, user says "book it" → "CLARIFY:Which train would you like to book - G100 or G101?"
+- After showing G100 and G101, user says "book the first one" → "BOOK:G100"
+- After showing only G100, user says "book it" → "BOOK:G100"
 
 Respond with ONLY the action, no explanation.`
 
