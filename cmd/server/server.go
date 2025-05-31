@@ -33,6 +33,7 @@ func main() {
 	http.HandleFunc("/query", handleQuery)
 	http.HandleFunc("/book", handleBook)
 	http.HandleFunc("/cancel", handleCancel)
+	http.HandleFunc("/list", handleList)
 	fmt.Println(":bullettrain_side: Ticket server is running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
@@ -79,4 +80,16 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "train not found", http.StatusNotFound)
 	}
+}
+
+func handleList(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var trainList []*Train
+	for _, train := range trains {
+		trainList = append(trainList, train)
+	}
+
+	json.NewEncoder(w).Encode(trainList)
 }

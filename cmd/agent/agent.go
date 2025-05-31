@@ -53,9 +53,42 @@ func NewBookingAgent(apiKey, serverURL string) *BookingAgent {
 	}
 }
 
+// Fetch available trains from server
+func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
+	resp, err := http.Get(fmt.Sprintf("%s/list", a.serverURL))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server error: %s", resp.Status)
+	}
+
+	var trains []Train
+	if err := json.NewDecoder(resp.Body).Decode(&trains); err != nil {
+		return nil, err
+	}
+
+	return trains, nil
+}
+
 // Call DeepSeek API to understand user intent
 func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
-	systemPrompt := `You are a train booking assistant. Analyze the user's request and respond with ONLY ONE of these actions:
+	// Fetch current train information dynamically
+	trains, err := a.fetchAvailableTrains()
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch train information: %v", err)
+	}
+
+	// Build train list for system prompt
+	trainList := "Available trains with departure/arrival times:\n"
+	for _, train := range trains {
+		trainList += fmt.Sprintf("- %s: %s-%s (%s-%s)\n",
+			train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime)
+	}
+
+	systemPrompt := fmt.Sprintf(`You are a train booking assistant. Analyze the user's request and respond with ONLY ONE of these actions:
 
 1. For querying train info: "QUERY:train_id" (e.g., "QUERY:G100")
 2. For booking tickets: "BOOK:train_id" (e.g., "BOOK:G100") 
@@ -63,18 +96,14 @@ func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
 4. For listing available trains: "LIST"
 5. If unclear: "CLARIFY:question to ask user"
 
-Available trains with departure/arrival times:
-- G100: Beijing-Shanghai (08:00-13:30)
-- D200: Guangzhou-Shenzhen (09:15-10:45) 
-- K300: Chengdu-Xi'an (18:20-07:40)
-
+%s
 Examples:
 - "Check G100 train" → "QUERY:G100"
 - "Book a ticket for D200" → "BOOK:D200"
 - "Cancel my K300 booking" → "CANCEL:K300"
 - "What trains are available?" → "LIST"
 
-Respond with ONLY the action, no explanation.`
+Respond with ONLY the action, no explanation.`, trainList)
 
 	req := ChatRequest{
 		Model: "deepseek-chat",
@@ -234,23 +263,19 @@ func (a *BookingAgent) cancelTicket(trainID string) string {
 }
 
 func (a *BookingAgent) listTrains() string {
-	trains := []string{"G100", "D200", "K300"}
+	trains, err := a.fetchAvailableTrains()
+	if err != nil {
+		return fmt.Sprintf("❌ Error fetching train list: %v", err)
+	}
+
+	if len(trains) == 0 {
+		return "❌ No trains available"
+	}
+
 	result := "🚄 Available Trains:\n"
-
-	for _, trainID := range trains {
-		resp, err := http.Get(fmt.Sprintf("%s/query?id=%s", a.serverURL, trainID))
-		if err != nil {
-			continue
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			var train Train
-			if json.NewDecoder(resp.Body).Decode(&train) == nil {
-				result += fmt.Sprintf("• %s: %s → %s | %s-%s (%d/%d available)\n",
-					train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
-			}
-		}
+	for _, train := range trains {
+		result += fmt.Sprintf("• %s: %s → %s | %s-%s (%d/%d available)\n",
+			train.ID, train.From, train.To, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
 	}
 
 	return result
@@ -259,7 +284,7 @@ func (a *BookingAgent) listTrains() string {
 func (a *BookingAgent) chat() {
 	fmt.Println("🤖 Train Booking Agent")
 	fmt.Println("💬 I can help you query, book, and cancel train tickets!")
-	fmt.Println("📝 Type 'quit' to exit\n")
+	fmt.Println("📝 Type 'quit' to exit")
 
 	scanner := bufio.NewScanner(os.Stdin)
 
