@@ -46,8 +46,6 @@ type BookingAgent struct {
 	apiKey              string
 	serverURL           string
 	conversationHistory []Message
-	lastSearchResults   []Train
-	userBookings        []string // Track user's bookings for context
 }
 
 func NewBookingAgent(apiKey, serverURL string) *BookingAgent {
@@ -55,8 +53,6 @@ func NewBookingAgent(apiKey, serverURL string) *BookingAgent {
 		apiKey:              apiKey,
 		serverURL:           serverURL,
 		conversationHistory: []Message{},
-		lastSearchResults:   []Train{},
-		userBookings:        []string{},
 	}
 }
 
@@ -82,31 +78,28 @@ func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
 
 // Call DeepSeek API to understand user intent
 func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
-	systemPrompt := `You are a train booking assistant with conversation memory. You maintain context across conversations and can reference previous searches and interactions.
+	systemPrompt := `You are a train booking assistant. You maintain context across conversations and can reference previous searches and interactions.
 
 Analyze the user's request and respond with ONLY ONE of these actions:
 
 1. For querying train info: "QUERY:train_id" (e.g., "QUERY:G100")
 2. For booking tickets: "BOOK:train_id" (e.g., "BOOK:G100") 
-3. For booking from last search: "BOOK_FROM_SEARCH:index" (e.g., "BOOK_FROM_SEARCH:0" for first result)
-4. For canceling tickets: "CANCEL:train_id" (e.g., "CANCEL:G100")
-5. For listing available trains: "LIST"
-6. For searching tickets by route/date: "SEARCH:from:to:date" (e.g., "SEARCH:Beijing:Shanghai:2025-06-01")
-7. If unclear: "CLARIFY:question to ask user"
+3. For canceling tickets: "CANCEL:train_id" (e.g., "CANCEL:G100")
+4. For listing available trains: "LIST"
+5. For searching tickets by route/date: "SEARCH:from:to:date" (e.g., "SEARCH:Beijing:Shanghai:2025-06-01")
+6. If unclear: "CLARIFY:question to ask user"
 
-Context-aware examples:
-- After showing search results, "Book the first one" → "BOOK_FROM_SEARCH:0"
-- "Book that train" (referring to previous result) → "BOOK_FROM_SEARCH:0"
-- "Book the second train" → "BOOK_FROM_SEARCH:1"
-- "I want the G100" (after search showed G100) → "BOOK:G100"
+Use conversation context to understand references:
+- If user says "book the first one" after seeing search results, extract the train ID from previous response
+- If user says "book G100" after seeing it in results, use "BOOK:G100"
+- If user refers to "that train" or "the second train", find the specific train ID from context
 
-Regular examples:
+Examples:
 - "Check G100 train" → "QUERY:G100"
-- "Book a ticket for D200" → "BOOK:D200"
-- "Cancel my K300 booking" → "CANCEL:K300"
-- "What trains are available?" → "LIST"
+- "Book a ticket for D200" → "BOOK:D200" 
 - "Find trains from Beijing to Shanghai" → "SEARCH:Beijing:Shanghai:"
-- "Trains from Beijing to Shanghai on June 1st" → "SEARCH:Beijing:Shanghai:2025-06-01"
+- After showing "G100: Beijing → Shanghai", user says "book it" → "BOOK:G100"
+- After showing search results with G100 first, user says "book the first" → "BOOK:G100"
 
 Respond with ONLY the action, no explanation.`
 
@@ -188,8 +181,6 @@ func (a *BookingAgent) executeAction(action string) string {
 		return a.queryTrain(trainID)
 	case "BOOK":
 		return a.bookTicket(trainID)
-	case "BOOK_FROM_SEARCH":
-		return a.bookFromSearch(trainID)
 	case "CANCEL":
 		return a.cancelTicket(trainID)
 	case "LIST":
@@ -257,34 +248,7 @@ func (a *BookingAgent) bookTicket(trainID string) string {
 		return fmt.Sprintf("❌ Error: %s", resp.Status)
 	}
 
-	// Track user's booking
-	a.userBookings = append(a.userBookings, trainID)
-
 	return fmt.Sprintf("✅ Successfully booked ticket for train %s!", trainID)
-}
-
-func (a *BookingAgent) bookFromSearch(indexStr string) string {
-	if len(a.lastSearchResults) == 0 {
-		return "❌ No previous search results found. Please search for trains first."
-	}
-
-	// Parse index (0-based)
-	var index int
-	if indexStr == "" {
-		index = 0 // Default to first result
-	} else {
-		_, err := fmt.Sscanf(indexStr, "%d", &index)
-		if err != nil {
-			return "❌ Invalid index. Please specify a number (e.g., 0 for first, 1 for second)."
-		}
-	}
-
-	if index < 0 || index >= len(a.lastSearchResults) {
-		return fmt.Sprintf("❌ Invalid index %d. Available results: 0-%d", index, len(a.lastSearchResults)-1)
-	}
-
-	train := a.lastSearchResults[index]
-	return a.bookTicket(train.ID)
 }
 
 func (a *BookingAgent) cancelTicket(trainID string) string {
@@ -394,9 +358,6 @@ func (a *BookingAgent) searchTickets(params []string) string {
 		}
 		return fmt.Sprintf("❌ No trains found %s", criteriaText)
 	}
-
-	// Store search results for contextual booking
-	a.lastSearchResults = trains
 
 	result := "🔍 Search Results:\n"
 	for i, train := range trains {
