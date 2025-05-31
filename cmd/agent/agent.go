@@ -46,6 +46,7 @@ type BookingAgent struct {
 	apiKey              string
 	serverURL           string
 	conversationHistory []Message
+	userID              string // Add user ID support
 }
 
 func NewBookingAgent(apiKey, serverURL string) *BookingAgent {
@@ -53,6 +54,7 @@ func NewBookingAgent(apiKey, serverURL string) *BookingAgent {
 		apiKey:              apiKey,
 		serverURL:           serverURL,
 		conversationHistory: []Message{},
+		userID:              "user_001", // Default user ID
 	}
 }
 
@@ -86,13 +88,15 @@ ACTIONS (respond with ONLY the action, no explanation):
 3. CANCEL:train_id - Cancel a ticket
 4. LIST - Show all available trains
 5. SEARCH:from:to:date - Search trains (any field can be empty)
-6. CLARIFY:question - Ask for clarification
+6. MY_TICKETS - Show user's booked tickets
+7. CLARIFY:question - Ask for clarification
 
 CRITICAL RULES:
 1. Parse previous search/list results carefully - they show numbered trains like "1. G100: Beijing → Shanghai..."
 2. When user references "first", "second", etc., match to the numbered list
 3. ALWAYS clarify when reference is ambiguous (multiple options + vague reference like "it", "that one")
 4. Single result + vague reference = OK to proceed with that result
+5. For cancellation without train ID, respond with: MY_TICKETS (this will show their tickets, then ask for clarification)
 
 CONTEXT PARSING:
 - Previous result shows "1. G100..." and "2. G101..." → User says "book the first" → BOOK:G100
@@ -104,6 +108,9 @@ EXAMPLES:
 User: "Check G100" → QUERY:G100
 User: "Book D200" → BOOK:D200
 User: "Find trains to Shanghai" → SEARCH::Shanghai:
+User: "Show my tickets" → MY_TICKETS
+User: "My bookings" → MY_TICKETS
+User: "What tickets do I have" → MY_TICKETS
 After "1. G100... 2. G101..." → User: "book it" → CLARIFY:Which train would you like to book - G100 or G101?
 After "1. G100... 2. G101..." → User: "book the first one" → BOOK:G100
 After "1. G100... 2. G101..." → User: "book the second" → BOOK:G101
@@ -196,6 +203,8 @@ func (a *BookingAgent) executeAction(action string) string {
 		return a.listTrains()
 	case "SEARCH":
 		return a.searchTickets(parts[1:]) // Pass remaining parts for from:to:date
+	case "MY_TICKETS":
+		return a.getUserTickets()
 	case "CLARIFY":
 		if len(parts) > 1 {
 			return "🤔 " + parts[1]
@@ -239,7 +248,7 @@ func (a *BookingAgent) bookTicket(trainID string) string {
 		return "❌ Please specify a train ID to book (e.g., G100, D200, K300)"
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/book?id=%s", a.serverURL, trainID))
+	resp, err := http.Get(fmt.Sprintf("%s/book?id=%s&user_id=%s", a.serverURL, trainID, a.userID))
 	if err != nil {
 		return fmt.Sprintf("❌ Error booking ticket: %v", err)
 	}
@@ -265,7 +274,7 @@ func (a *BookingAgent) cancelTicket(trainID string) string {
 		return "❌ Please specify a train ID to cancel (e.g., G100, D200, K300)"
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/cancel?id=%s", a.serverURL, trainID))
+	resp, err := http.Get(fmt.Sprintf("%s/cancel?id=%s&user_id=%s", a.serverURL, trainID, a.userID))
 	if err != nil {
 		return fmt.Sprintf("❌ Error canceling ticket: %v", err)
 	}
@@ -375,6 +384,68 @@ func (a *BookingAgent) searchTickets(params []string) string {
 	}
 
 	return result
+}
+
+// UserBooking represents a user's booking information
+type UserBooking struct {
+	TrainID string `json:"train_id"`
+	Count   int    `json:"count"`
+}
+
+func (a *BookingAgent) getUserTickets() string {
+	resp, err := http.Get(fmt.Sprintf("%s/user/tickets?user_id=%s", a.serverURL, a.userID))
+	if err != nil {
+		return fmt.Sprintf("❌ Error fetching your tickets: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Sprintf("❌ Error: %s", resp.Status)
+	}
+
+	var userBookings []UserBooking
+	if err := json.NewDecoder(resp.Body).Decode(&userBookings); err != nil {
+		return fmt.Sprintf("❌ Error decoding response: %v", err)
+	}
+
+	if len(userBookings) == 0 {
+		return "📋 You don't have any booked tickets yet."
+	}
+
+	result := "🎫 Your Booked Tickets:\n"
+	for _, booking := range userBookings {
+		// Get train details for each booking
+		train := a.getTrainDetails(booking.TrainID)
+		if train != nil {
+			result += fmt.Sprintf("• %s: %s → %s | %s | %s-%s (x%d tickets)\n",
+				booking.TrainID, train.From, train.To, train.Date,
+				train.DepartureTime, train.ArrivalTime, booking.Count)
+		} else {
+			result += fmt.Sprintf("• %s (x%d tickets)\n", booking.TrainID, booking.Count)
+		}
+	}
+
+	return result
+}
+
+// Helper method to get train details
+func (a *BookingAgent) getTrainDetails(trainID string) *Train {
+	resp, err := http.Get(fmt.Sprintf("%s/query?id=%s", a.serverURL, trainID))
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var train Train
+	if err := json.NewDecoder(resp.Body).Decode(&train); err != nil {
+		return nil
+	}
+
+	return &train
 }
 
 func (a *BookingAgent) chat() {

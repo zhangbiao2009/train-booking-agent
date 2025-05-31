@@ -78,10 +78,17 @@ type Train struct {
 	Available     int    `json:"available"`
 }
 
+// User booking information
+type UserBooking struct {
+	TrainID string `json:"train_id"`
+	Count   int    `json:"count"`
+}
+
 // Train ticket information stored in map
 var (
-	trains = map[string]*Train{}
-	mu     sync.Mutex // Concurrency protection
+	trains      = map[string]*Train{}
+	userTickets = map[string]map[string]int{} // userID -> trainID -> count
+	mu          sync.Mutex                    // Concurrency protection
 )
 
 func main() {
@@ -99,6 +106,7 @@ func main() {
 	http.HandleFunc("/cancel", loggingMiddleware(handleCancel))
 	http.HandleFunc("/list", loggingMiddleware(handleList))
 	http.HandleFunc("/tickets", loggingMiddleware(handleTickets))
+	http.HandleFunc("/user/tickets", loggingMiddleware(handleUserTickets))
 	fmt.Println(":bullettrain_side: Ticket server is running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
@@ -114,11 +122,26 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 }
 func handleBook(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = "default" // Default user ID if not provided
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
+
 	if train, ok := trains[id]; ok {
 		if train.Available > 0 {
 			train.Available--
+
+			// Initialize user tickets map if not exists
+			if userTickets[userID] == nil {
+				userTickets[userID] = make(map[string]int)
+			}
+
+			// Increment user's booking count for this train
+			userTickets[userID][id]++
+
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": "booked successfully",
 			})
@@ -131,16 +154,34 @@ func handleBook(w http.ResponseWriter, r *http.Request) {
 }
 func handleCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = "default" // Default user ID if not provided
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
+
 	if train, ok := trains[id]; ok {
-		if train.Available < train.TotalTickets {
+		// Check if user has bookings for this train
+		if userTickets[userID] != nil && userTickets[userID][id] > 0 {
 			train.Available++
+			userTickets[userID][id]--
+
+			// Remove train from user's bookings if count reaches 0
+			if userTickets[userID][id] == 0 {
+				delete(userTickets[userID], id)
+				// Clean up empty user map
+				if len(userTickets[userID]) == 0 {
+					delete(userTickets, userID)
+				}
+			}
+
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": "cancellation successful",
 			})
 		} else {
-			http.Error(w, "no tickets to cancel", http.StatusConflict)
+			http.Error(w, "no tickets to cancel for this user", http.StatusConflict)
 		}
 	} else {
 		http.Error(w, "train not found", http.StatusNotFound)
@@ -195,4 +236,27 @@ func handleTickets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(matchingTrains)
+}
+
+func handleUserTickets(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = "default" // Default user ID if not provided
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var userBookings []UserBooking
+
+	if userTickets[userID] != nil {
+		for trainID, count := range userTickets[userID] {
+			userBookings = append(userBookings, UserBooking{
+				TrainID: trainID,
+				Count:   count,
+			})
+		}
+	}
+
+	json.NewEncoder(w).Encode(userBookings)
 }
