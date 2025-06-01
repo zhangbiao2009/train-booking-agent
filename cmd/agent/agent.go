@@ -90,6 +90,8 @@ func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
 func (a *BookingAgent) callDeepSeek(userInput string) (*IntentResponse, error) {
 	systemPrompt := `You are a train booking assistant. Analyze user requests and respond with structured JSON.
 
+CRITICAL: Your response must be valid JSON only. Do not use markdown code blocks, do not wrap JSON in backticks, do not add any explanatory text. Return only the raw JSON object without any formatting or wrapper text.
+
 AVAILABLE APIs:
 /query - Get train information
 Parameters: id (required, train ID like G100)
@@ -125,7 +127,7 @@ CONTEXT PARSING:
 
 If the user's message is unclear or lacks required parameters, ask a clarifying question. Try to confirm the missing fields in natural, polite English.
 
-Always respond with the following structured JSON format:
+RESPONSE FORMAT: Return ONLY valid JSON in this exact structure (no markdown, no backticks, no explanations):
 {
   "intent": "query_ticket | book_ticket | cancel_ticket | list_trains | search_trains | my_tickets | unknown",
   "parameters": {
@@ -145,7 +147,9 @@ User: "Find trains to Shanghai" → {"intent": "search_trains", "parameters": {"
 User: "Book a ticket" → {"intent": "book_ticket", "parameters": {}, "missing_parameters": ["train_id"], "clarify_question": "Which train would you like to book? Please provide the train ID or tell me your travel details."}
 User: "Show my bookings" → {"intent": "my_tickets", "parameters": {}, "missing_parameters": [], "clarify_question": ""}
 
-If you cannot understand the user's intent at all, set intent to "unknown" and leave other fields empty.`
+If you cannot understand the user's intent at all, set intent to "unknown" and leave other fields empty.
+
+IMPORTANT: Your entire response must be parseable JSON. No markdown formatting, no code blocks, no extra text.`
 
 	// Add user input to conversation history
 	a.conversationHistory = append(a.conversationHistory, Message{
