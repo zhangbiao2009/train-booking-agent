@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -41,6 +40,14 @@ type Train struct {
 	ArrivalTime   string `json:"arrival_time"`
 	TotalTickets  int    `json:"total_tickets"`
 	Available     int    `json:"available"`
+}
+
+// Intent response structure
+type IntentResponse struct {
+	Intent            string            `json:"intent"`
+	Parameters        map[string]string `json:"parameters"`
+	MissingParameters []string          `json:"missing_parameters"`
+	ClarifyQuestion   string            `json:"clarify_question"`
 }
 
 type BookingAgent struct {
@@ -80,39 +87,65 @@ func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
 }
 
 // Call DeepSeek API to understand user intent
-func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
-	systemPrompt := `You are a train booking assistant with conversation memory. 
+func (a *BookingAgent) callDeepSeek(userInput string) (*IntentResponse, error) {
+	systemPrompt := `You are a train booking assistant. Analyze user requests and respond with structured JSON.
 
-ACTIONS (respond with ONLY these, no additional text):
-1. QUERY:train_id - Get train information
-2. BOOK:train_id - Book a ticket  
-3. CANCEL:train_id - Cancel a ticket
-4. LIST - Show all available trains
-5. SEARCH:from:to:date - Search trains (any field can be empty)
-6. MY_TICKETS - Show user's booked tickets
-7. CLARIFY:question - Ask for clarification
+AVAILABLE APIs:
+/query - Get train information
+Parameters: id (required, train ID like G100)
 
+/book - Book a train ticket  
+Parameters: id (required, train ID), user_id (required, user identifier)
 
-CONTEXT PARSING RULES:
-1. Look for numbered results like "1. G100: Beijing → Shanghai..." in [RESULT] sections
-2. When user says "first", "second", extract train ID from the numbered position
-3. Count actual results to validate references ("third" when only 2 shown = clarify)
-4. For vague references with multiple options, always clarify
+/cancel - Cancel a train ticket
+Parameters: id (required, train ID), user_id (required, user identifier)
+
+/list - Show all available trains
+Parameters: None
+
+/tickets - Search trains by criteria
+Parameters: from (optional, departure city), to (optional, destination city), date (optional, YYYY-MM-DD)
+
+/user/tickets - Get user's booked tickets
+Parameters: user_id (required, user identifier)
+
+INTENT CLASSIFICATION:
+- query_ticket: User wants information about a specific train
+- book_ticket: User wants to book a ticket (specific train or search criteria)
+- cancel_ticket: User wants to cancel a booked ticket
+- list_trains: User wants to see all available trains
+- search_trains: User wants to search for trains by criteria
+- my_tickets: User wants to see their booked tickets
+- unknown: Cannot determine intent
+
+CONTEXT PARSING:
+- Parse numbered results from previous responses like "1. G100: Beijing → Shanghai..."
+- When user says "first", "second", extract train ID from numbered position
+- For vague references with multiple options, ask for clarification
+
+If the user's message is unclear or lacks required parameters, ask a clarifying question. Try to confirm the missing fields in natural, polite English.
+
+Always respond with the following structured JSON format:
+{
+  "intent": "query_ticket | book_ticket | cancel_ticket | list_trains | search_trains | my_tickets | unknown",
+  "parameters": {
+    "train_id": "",
+    "from": "",
+    "to": "",
+    "date": ""
+  },
+  "missing_parameters": [],
+  "clarify_question": ""
+}
 
 EXAMPLES:
-User: "Check G100" → QUERY:G100
-User: "Book D200" → BOOK:D200
-User: "Find trains to Shanghai" → SEARCH::Shanghai:
-User: "Show my tickets" → MY_TICKETS
-User: "My bookings" → MY_TICKETS
-User: "What tickets do I have" → MY_TICKETS
-After "1. G100... 2. G101..." → User: "book it" → CLARIFY:Which train would you like to book - G100 or G101?
-After "1. G100... 2. G101..." → User: "book the first one" → BOOK:G100
-After "1. G100... 2. G101..." → User: "book the second" → BOOK:G101
-After showing only G100 → User: "book it" → BOOK:G100
-After "1. G100... 2. G101..." → User: "book the third" → CLARIFY:I only showed 2 trains. Which one did you mean - G100 or G101?
+User: "Check train G100" → {"intent": "query_ticket", "parameters": {"train_id": "G100"}, "missing_parameters": [], "clarify_question": ""}
+User: "Book ticket for D200" → {"intent": "book_ticket", "parameters": {"train_id": "D200"}, "missing_parameters": [], "clarify_question": ""}
+User: "Find trains to Shanghai" → {"intent": "search_trains", "parameters": {"to": "Shanghai"}, "missing_parameters": [], "clarify_question": ""}
+User: "Book a ticket" → {"intent": "book_ticket", "parameters": {}, "missing_parameters": ["train_id"], "clarify_question": "Which train would you like to book? Please provide the train ID or tell me your travel details."}
+User: "Show my bookings" → {"intent": "my_tickets", "parameters": {}, "missing_parameters": [], "clarify_question": ""}
 
-IMPORTANT: Extract train IDs from the numbered search results when users reference by position.`
+If you cannot understand the user's intent at all, set intent to "unknown" and leave other fields empty.`
 
 	// Add user input to conversation history
 	a.conversationHistory = append(a.conversationHistory, Message{
@@ -139,12 +172,12 @@ IMPORTANT: Extract train IDs from the numbered search results when users referen
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	httpReq, err := http.NewRequest("POST", "https://api.deepseek.com/v1/chat/completions", bytes.NewBuffer(data))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -153,22 +186,22 @@ IMPORTANT: Extract train IDs from the numbered search results when users referen
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("no response from DeepSeek")
+		return nil, fmt.Errorf("no response from DeepSeek")
 	}
 
 	response := strings.TrimSpace(chatResp.Choices[0].Message.Content)
@@ -176,55 +209,48 @@ IMPORTANT: Extract train IDs from the numbered search results when users referen
 	// Debug logging - remove this in production
 	fmt.Printf("\r🔍 Debug - DeepSeek response: %q\n", response)
 
-	return response, nil
+	// Parse JSON response
+	var intentResp IntentResponse
+	if err := json.Unmarshal([]byte(response), &intentResp); err != nil {
+		// If JSON parsing fails, treat as unknown intent
+		return &IntentResponse{
+			Intent:          "unknown",
+			Parameters:      map[string]string{},
+			ClarifyQuestion: "I didn't understand your request. Could you please rephrase it?",
+		}, nil
+	}
+
+	return &intentResp, nil
 }
 
 // Execute the action determined by DeepSeek
-func (a *BookingAgent) executeAction(action string) string {
-	parts := strings.Split(action, ":")
-	if len(parts) < 1 {
-		return "❌ Invalid action format"
+func (a *BookingAgent) executeAction(intentResp *IntentResponse) string {
+	// If there's a clarify question, return it directly
+	if intentResp.ClarifyQuestion != "" {
+		return "🤔 " + intentResp.ClarifyQuestion
 	}
 
-	command := strings.TrimSpace(parts[0])
-	// TODO: shouldn't parse train ID here, all the arguments shoulb be parsed in each command method.
-	var trainID string
-	if len(parts) > 1 {
-		// Clean the train ID - remove whitespace, newlines, and any extra text
-		trainID = strings.TrimSpace(parts[1])
-		// Remove newlines, tabs, and other whitespace
-		trainID = strings.ReplaceAll(trainID, "\n", "")
-		trainID = strings.ReplaceAll(trainID, "\r", "")
-		trainID = strings.ReplaceAll(trainID, "\t", "")
-		// Only keep alphanumeric characters and common train ID patterns
-		fields := strings.Fields(trainID)
-		if len(fields) > 0 {
-			trainID = fields[0] // Take only the first "word"
-			// Further clean to only allow alphanumeric and common train ID characters
-			trainID = regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(trainID, "")
-		} else {
-			trainID = ""
-		}
-	}
-
-	switch command {
-	case "QUERY":
+	switch intentResp.Intent {
+	case "query_ticket":
+		trainID := intentResp.Parameters["train_id"]
 		return a.queryTrain(trainID)
-	case "BOOK":
+	case "book_ticket":
+		trainID := intentResp.Parameters["train_id"]
 		return a.bookTicket(trainID)
-	case "CANCEL":
+	case "cancel_ticket":
+		trainID := intentResp.Parameters["train_id"]
 		return a.cancelTicket(trainID)
-	case "LIST":
+	case "list_trains":
 		return a.listTrains()
-	case "SEARCH":
-		return a.searchTickets(parts[1:]) // Pass remaining parts for from:to:date
-	case "MY_TICKETS":
+	case "search_trains":
+		from := intentResp.Parameters["from"]
+		to := intentResp.Parameters["to"]
+		date := intentResp.Parameters["date"]
+		return a.searchTrains(from, to, date)
+	case "my_tickets":
 		return a.getUserTickets()
-	case "CLARIFY":
-		if len(parts) > 1 {
-			return "🤔 " + parts[1]
-		}
-		return "🤔 Could you please clarify your request?"
+	case "unknown":
+		return "❌ I didn't understand your request. Please try asking to query, book, cancel, search for trains, or list all trains."
 	default:
 		return "❌ I don't understand that action. Please try asking to query, book, cancel, search for trains, or list all trains."
 	}
@@ -340,19 +366,7 @@ func (a *BookingAgent) listTrains() string {
 	return result
 }
 
-func (a *BookingAgent) searchTickets(params []string) string {
-	// Parse search parameters: from, to, date
-	var from, to, date string
-	if len(params) > 0 {
-		from = params[0]
-	}
-	if len(params) > 1 {
-		to = params[1]
-	}
-	if len(params) > 2 {
-		date = params[2]
-	}
-
+func (a *BookingAgent) searchTrains(from, to, date string) string {
 	// Build query string
 	var queryParams []string
 	if from != "" {
@@ -500,14 +514,14 @@ func (a *BookingAgent) chat() {
 		fmt.Print("🤖 Agent: Thinking...")
 
 		// Get intent from DeepSeek
-		action, err := a.callDeepSeek(userInput)
+		intentResp, err := a.callDeepSeek(userInput)
 		if err != nil {
 			fmt.Printf("\r❌ Error calling DeepSeek API: %v\n", err)
 			continue
 		}
 
 		// Execute the action
-		result := a.executeAction(action)
+		result := a.executeAction(intentResp)
 		fmt.Printf("\r🤖 Agent: %s\n\n", result)
 
 		a.conversationHistory = append(a.conversationHistory, Message{
