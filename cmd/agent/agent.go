@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -80,9 +81,9 @@ func (a *BookingAgent) fetchAvailableTrains() ([]Train, error) {
 
 // Call DeepSeek API to understand user intent
 func (a *BookingAgent) callDeepSeek(userInput string) (string, error) {
-	systemPrompt := `You are a train booking assistant with conversation memory.
+	systemPrompt := `You are a train booking assistant with conversation memory. 
 
-ACTIONS (respond with ONLY the action, no explanation):
+ACTIONS (respond with ONLY these, no additional text):
 1. QUERY:train_id - Get train information
 2. BOOK:train_id - Book a ticket  
 3. CANCEL:train_id - Cancel a ticket
@@ -91,18 +92,12 @@ ACTIONS (respond with ONLY the action, no explanation):
 6. MY_TICKETS - Show user's booked tickets
 7. CLARIFY:question - Ask for clarification
 
-CRITICAL RULES:
-1. Parse previous search/list results carefully - they show numbered trains like "1. G100: Beijing → Shanghai..."
-2. When user references "first", "second", etc., match to the numbered list
-3. ALWAYS clarify when reference is ambiguous (multiple options + vague reference like "it", "that one")
-4. Single result + vague reference = OK to proceed with that result
-5. For cancellation without train ID, respond with: MY_TICKETS (this will show their tickets, then ask for clarification)
 
-CONTEXT PARSING:
-- Previous result shows "1. G100..." and "2. G101..." → User says "book the first" → BOOK:G100
-- Previous result shows multiple trains → User says "book it" → CLARIFY with specific train IDs
-- Previous result shows one train G100 → User says "book it" → BOOK:G100
-- No recent train results → User says "book it" → CLARIFY what train they want
+CONTEXT PARSING RULES:
+1. Look for numbered results like "1. G100: Beijing → Shanghai..." in [RESULT] sections
+2. When user says "first", "second", extract train ID from the numbered position
+3. Count actual results to validate references ("third" when only 2 shown = clarify)
+4. For vague references with multiple options, always clarify
 
 EXAMPLES:
 User: "Check G100" → QUERY:G100
@@ -176,7 +171,12 @@ IMPORTANT: Extract train IDs from the numbered search results when users referen
 		return "", fmt.Errorf("no response from DeepSeek")
 	}
 
-	return strings.TrimSpace(chatResp.Choices[0].Message.Content), nil
+	response := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+
+	// Debug logging - remove this in production
+	fmt.Printf("\r🔍 Debug - DeepSeek response: %q\n", response)
+
+	return response, nil
 }
 
 // Execute the action determined by DeepSeek
@@ -186,10 +186,25 @@ func (a *BookingAgent) executeAction(action string) string {
 		return "❌ Invalid action format"
 	}
 
-	command := parts[0]
+	command := strings.TrimSpace(parts[0])
+	// TODO: shouldn't parse train ID here, all the arguments shoulb be parsed in each command method.
 	var trainID string
 	if len(parts) > 1 {
-		trainID = parts[1]
+		// Clean the train ID - remove whitespace, newlines, and any extra text
+		trainID = strings.TrimSpace(parts[1])
+		// Remove newlines, tabs, and other whitespace
+		trainID = strings.ReplaceAll(trainID, "\n", "")
+		trainID = strings.ReplaceAll(trainID, "\r", "")
+		trainID = strings.ReplaceAll(trainID, "\t", "")
+		// Only keep alphanumeric characters and common train ID patterns
+		fields := strings.Fields(trainID)
+		if len(fields) > 0 {
+			trainID = fields[0] // Take only the first "word"
+			// Further clean to only allow alphanumeric and common train ID characters
+			trainID = regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(trainID, "")
+		} else {
+			trainID = ""
+		}
 	}
 
 	switch command {
@@ -248,7 +263,13 @@ func (a *BookingAgent) bookTicket(trainID string) string {
 		return "❌ Please specify a train ID to book (e.g., G100, D200, K300)"
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/book?id=%s&user_id=%s", a.serverURL, trainID, a.userID))
+	// Debug logging - remove this in production
+	fmt.Printf("🔍 Debug - Booking train ID: %q (length: %d)\n", trainID, len(trainID))
+
+	url := fmt.Sprintf("%s/book?id=%s&user_id=%s", a.serverURL, trainID, a.userID)
+	fmt.Printf("🔍 Debug - Request URL: %q\n", url)
+
+	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Sprintf("❌ Error booking ticket: %v", err)
 	}
@@ -260,6 +281,11 @@ func (a *BookingAgent) bookTicket(trainID string) string {
 
 	if resp.StatusCode == http.StatusConflict {
 		return fmt.Sprintf("❌ No tickets available for train %s", trainID)
+	}
+
+	if resp.StatusCode == http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Sprintf("❌ Invalid request: %s", string(body))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -484,7 +510,6 @@ func (a *BookingAgent) chat() {
 		result := a.executeAction(action)
 		fmt.Printf("\r🤖 Agent: %s\n\n", result)
 
-		// Add agent response to conversation history
 		a.conversationHistory = append(a.conversationHistory, Message{
 			Role:    "assistant",
 			Content: result,

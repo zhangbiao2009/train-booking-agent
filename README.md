@@ -10,6 +10,8 @@
 - ❌ Cancel bookings
 - 📋 List available trains
 - 🔍 Search trains by route, date, or combination of criteria
+- 👤 User ticket state management with counters
+- 📊 View your booked tickets and booking counts
 
 ## Setup
 
@@ -63,6 +65,12 @@ Once the agent is running, you can interact with it using natural language:
 - "Trains on June 2nd"
 - "Find trains from Guangzhou"
 
+### View Your Tickets
+- "Show my tickets"
+- "What tickets do I have?"
+- "My bookings"
+- "List my reservations"
+
 ## Available Trains
 
 Current trains with dates and times:
@@ -81,10 +89,11 @@ Current trains with dates and times:
 
 ### Server Endpoints
 - `GET /query?id={train_id}` - Get specific train information
-- `GET /book?id={train_id}` - Book a ticket for a train
-- `GET /cancel?id={train_id}` - Cancel a ticket booking
+- `GET /book?id={train_id}&user_id={user_id}` - Book a ticket for a train (user_id required)
+- `GET /cancel?id={train_id}&user_id={user_id}` - Cancel a ticket booking (user_id required)
 - `GET /list` - List all available trains (with tickets > 0)
 - `GET /tickets?from={city}&to={city}&date={YYYY-MM-DD}` - Search trains by criteria
+- `GET /user/tickets?user_id={user_id}` - Get user's booked tickets with counts (user_id required)
 
 ## Architecture
 
@@ -100,12 +109,25 @@ User Input → DeepSeek API → Intent Recognition → Action Execution → HTTP
 
 ## Error Handling
 
-The agent handles various error scenarios:
-- ❌ Invalid train IDs
-- ❌ No tickets available
-- ❌ Server connection issues
+The agent and server handle various error scenarios:
+
+### Server API Errors
+- ❌ **400 Bad Request**: Missing required parameters (user_id, train_id)
+- ❌ **404 Not Found**: Invalid train IDs
+- ❌ **409 Conflict**: No tickets available or no tickets to cancel
+- ❌ **500 Internal Server Error**: Server connection issues
+
+### Agent Errors
 - ❌ API key not set
 - ❌ Server not running
+- ❌ Network connection issues
+- ❌ Invalid user input
+
+### Parameter Validation
+All user-specific endpoints now require proper parameter validation:
+- `book` and `cancel`: Require both `id` and `user_id` parameters
+- `user/tickets`: Requires `user_id` parameter
+- Missing parameters return 400 status with clear error messages
 
 ## Development
 
@@ -120,3 +142,43 @@ To modify the agent behavior:
 - `GET /query?id={trainId}` - Query train information
 - `GET /book?id={trainId}` - Book a ticket
 - `GET /cancel?id={trainId}` - Cancel a booking
+
+## User Ticket State Management
+
+The system now maintains user ticket state with intelligent counters:
+
+### Features
+- **Multiple Bookings**: Users can book the same ticket multiple times
+- **Smart Counters**: Each booking increments a counter for that train
+- **Automatic Cleanup**: When a user cancels all tickets for a train, it's removed from their state
+- **User Isolation**: Each user's bookings are tracked separately
+- **Persistent State**: Ticket counts are maintained during the server session
+
+### How It Works
+1. **Booking**: `book?id=G100&user_id=user123` increments the user's G100 ticket count
+2. **Cancellation**: `cancel?id=G100&user_id=user123` decrements the count
+3. **View Tickets**: `user/tickets?user_id=user123` shows all user's tickets with counts
+4. **Zero Count Cleanup**: When count reaches 0, the train is removed from user's bookings
+
+### Example Workflow
+```bash
+# Book 2 tickets for G100
+curl "localhost:8080/book?id=G100&user_id=user123"  # count: 1
+curl "localhost:8080/book?id=G100&user_id=user123"  # count: 2
+
+# Book 1 ticket for D200  
+curl "localhost:8080/book?id=D200&user_id=user123"  # count: 1
+
+# Check tickets: [{"train_id":"G100","count":2},{"train_id":"D200","count":1}]
+curl "localhost:8080/user/tickets?user_id=user123"
+
+# Cancel 1 G100 ticket
+curl "localhost:8080/cancel?id=G100&user_id=user123"  # count: 1
+
+# Cancel last G100 ticket (removes from state)
+curl "localhost:8080/cancel?id=G100&user_id=user123"  # G100 removed
+
+# Final state: [{"train_id":"D200","count":1}]
+```
+
+## Available Trains
