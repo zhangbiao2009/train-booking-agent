@@ -6,7 +6,7 @@ jobs:
     name: lint
     runs-on: prod-arc-runner
     steps:
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '^1.19'
           cache: false
