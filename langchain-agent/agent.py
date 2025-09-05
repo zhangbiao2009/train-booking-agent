@@ -131,9 +131,9 @@ CONTEXT AWARENESS:
 - Maintain user context across conversations
 
 MISSING PARAMETERS:
-- For booking/canceling: user_id is required
+- For booking/canceling: DO NOT ask for clarifying questions if you have location criteria (from_city/to_city) that can be used to find matching trains
 - For searching: at least one of from_city, to_city, or date
-- Ask clarifying questions for missing required parameters
+- Only ask clarifying questions for truly missing required information
 
 RESPONSE FORMAT:
 Return a JSON object with this exact structure:
@@ -150,7 +150,10 @@ Return a JSON object with this exact structure:
   "clarify_question": "question to ask user if parameters are missing or empty string"
 }}
 
-IMPORTANT: Always use empty strings ("") instead of null values. Always return valid JSON matching the exact schema above."""
+IMPORTANT RULES:
+- For book_ticket/cancel_ticket intents: If you have from_city or to_city, DO NOT set clarify_question. Let the system find matching trains.
+- For search_trains: Only set clarify_question if no criteria provided at all
+- Always use empty strings ("") instead of null values. Always return valid JSON matching the exact schema above."""
 
     def _extract_intent(self, user_input: str) -> IntentResponse:
         """Extract intent and parameters from user input using LangChain structured parsing"""
@@ -271,21 +274,9 @@ IMPORTANT: Always use empty strings ("") instead of null values. Always return v
     def _search_trains(self, from_city: str = "", to_city: str = "", date: str = "") -> str:
         """Search trains by criteria"""
         try:
-            params = {}
-            if from_city:
-                params["from"] = from_city
-            if to_city:
-                params["to"] = to_city
-            if date:
-                params["date"] = date
+            trains = self._search_trains_internal(from_city, to_city, date)
             
-            response = requests.get(f"{self.server_url}/tickets", params=params)
-            
-            if response.status_code != 200:
-                return f"❌ Error: {response.status_text}"
-            
-            trains_data = response.json()
-            if not trains_data:
+            if not trains:
                 criteria = []
                 if from_city:
                     criteria.append(f"from {from_city}")
@@ -297,8 +288,7 @@ IMPORTANT: Always use empty strings ("") instead of null values. Always return v
                 return f"❌ No trains found {criteria_text}"
             
             result = "🔍 Search Results:\n"
-            for i, train_data in enumerate(trains_data, 1):
-                train = Train.from_dict(train_data)
+            for i, train in enumerate(trains, 1):
                 result += f"{i}. {train.id}: {train.from_city} → {train.to_city} | {train.date} | {train.departure_time}-{train.arrival_time} ({train.available}/{train.total_tickets} available)\n"
             
             return result
@@ -345,12 +335,101 @@ IMPORTANT: Always use empty strings ("") instead of null values. Always return v
         except:
             return None
 
+    def _check_train_ambiguity(self, intent_response: IntentResponse) -> Optional[str]:
+        """Check if the extracted train criteria is ambiguous and return clarification question"""
+        
+        if intent_response.intent not in ["book_ticket", "cancel_ticket", "query_ticket"]:
+            return None
+            
+        params = intent_response.parameters
+        train_id = params.get("train_id", "")
+        from_city = params.get("from_city", "")
+        to_city = params.get("to_city", "")
+        date = params.get("date", "")
+        
+        # Check for ambiguity in two cases:
+        # 1. User provided location criteria but no specific train_id
+        # 2. User provided both train_id and location criteria (double-check)
+        
+        if (from_city or to_city) and intent_response.intent in ["book_ticket", "cancel_ticket", "query_ticket"]:
+            try:
+                # Search for trains matching the criteria
+                matching_trains = self._search_trains_internal(from_city, to_city, date)
+                
+                if len(matching_trains) > 1:
+                    # Multiple trains match - ask for clarification
+                    train_options = []
+                    for i, train in enumerate(matching_trains[:5], 1):  # Show up to 5 options
+                        train_options.append(f"{i}. {train.id}: {train.from_city} → {train.to_city} | {train.date} | {train.departure_time}")
+                    
+                    options_text = "\n".join(train_options)
+                    criteria_text = []
+                    if from_city:
+                        criteria_text.append(f"from {from_city}")
+                    if to_city:
+                        criteria_text.append(f"to {to_city}")
+                    if date:
+                        criteria_text.append(f"on {date}")
+                    
+                    criteria_str = " ".join(criteria_text) if criteria_text else "matching your criteria"
+                    action_word = intent_response.intent.replace("_ticket", "").replace("_", " ")
+                    
+                    return f"I found multiple trains {criteria_str}:\n\n{options_text}\n\nWhich specific train would you like to {action_word}? Please specify the train ID (e.g., {matching_trains[0].id})."
+                
+                elif len(matching_trains) == 1 and not train_id:
+                    # Only one match - we can auto-select it
+                    # Update the parameters with the found train
+                    intent_response.parameters["train_id"] = matching_trains[0].id
+                    return None  # Continue with the action
+                        
+            except Exception as e:
+                # If search fails, continue with original logic
+                print(f"🔍 Debug - Ambiguity check error: {e}")
+                pass
+                
+        return None
+
+    def _search_trains_internal(self, from_city: str = "", to_city: str = "", date: str = "") -> List[Train]:
+        """Internal method to search trains and return Train objects"""
+        try:
+            params = {}
+            if from_city:
+                params["from"] = from_city
+            if to_city:
+                params["to"] = to_city
+            if date:
+                params["date"] = date
+            
+            response = requests.get(f"{self.server_url}/tickets", params=params)
+            
+            if response.status_code != 200:
+                return []
+            
+            trains_data = response.json()
+            return [Train.from_dict(train_data) for train_data in trains_data]
+            
+        except Exception:
+            return []
+
     def _execute_action(self, intent_response: IntentResponse) -> str:
         """Execute the action based on extracted intent"""
         
-        # If there's a clarify question, return it
+        # Check for train ambiguity FIRST (higher priority than clarify questions)
+        ambiguity_question = self._check_train_ambiguity(intent_response)
+        if ambiguity_question:
+            return f"🤔 {ambiguity_question}"
+        
+        # If there's a clarify question and no location criteria to resolve ambiguity, return it
         if intent_response.clarify_question:
-            return f"🤔 {intent_response.clarify_question}"
+            params = intent_response.parameters
+            has_location_criteria = params.get("from_city") or params.get("to_city")
+            
+            # Skip clarify question if we have location criteria for booking/canceling
+            if intent_response.intent in ["book_ticket", "cancel_ticket"] and has_location_criteria:
+                # Continue to booking logic which will handle ambiguity
+                pass
+            else:
+                return f"🤔 {intent_response.clarify_question}"
         
         params = intent_response.parameters
         
@@ -364,6 +443,46 @@ IMPORTANT: Always use empty strings ("") instead of null values. Always return v
         elif intent_response.intent == "book_ticket":
             train_id = params.get("train_id", "")
             user_id = params.get("user_id", "")
+            from_city = params.get("from_city", "")
+            to_city = params.get("to_city", "")
+            date = params.get("date", "")
+            
+            # If no train_id but we have location criteria, try to resolve ambiguity
+            if not train_id and (from_city or to_city):
+                try:
+                    matching_trains = self._search_trains_internal(from_city, to_city, date)
+                    
+                    if len(matching_trains) > 1:
+                        # Multiple trains match - ask for clarification
+                        train_options = []
+                        for i, train in enumerate(matching_trains[:5], 1):
+                            train_options.append(f"{i}. {train.id}: {train.from_city} → {train.to_city} | {train.date} | {train.departure_time}")
+                        
+                        options_text = "\n".join(train_options)
+                        criteria_text = []
+                        if from_city:
+                            criteria_text.append(f"from {from_city}")
+                        if to_city:
+                            criteria_text.append(f"to {to_city}")
+                        if date:
+                            criteria_text.append(f"on {date}")
+                        
+                        criteria_str = " ".join(criteria_text) if criteria_text else "matching your criteria"
+                        
+                        return f"🤔 I found multiple trains {criteria_str}:\n\n{options_text}\n\nWhich specific train would you like to book? Please specify the train ID (e.g., {matching_trains[0].id})."
+                    
+                    elif len(matching_trains) == 1:
+                        # Only one match - auto-select it
+                        train_id = matching_trains[0].id
+                        print(f"🔍 Debug - Auto-selected train {train_id} based on criteria")
+                    
+                    elif len(matching_trains) == 0:
+                        criteria_str = " ".join([f"from {from_city}" if from_city else "", f"to {to_city}" if to_city else "", f"on {date}" if date else ""]).strip()
+                        return f"❌ No trains found {criteria_str}"
+                        
+                except Exception as e:
+                    print(f"🔍 Debug - Train search error: {e}")
+            
             if not train_id:
                 return "❌ Please specify a train ID to book"
             return self._book_ticket(train_id, user_id)
