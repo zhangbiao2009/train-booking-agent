@@ -134,7 +134,8 @@ RESPONSE FORMAT: Return ONLY valid JSON in this exact structure (no markdown, no
     "train_id": "",
     "from": "",
     "to": "",
-    "date": ""
+    "date": "",
+    "user_id": ""
   },
   "missing_parameters": [],
   "clarify_question": ""
@@ -142,10 +143,11 @@ RESPONSE FORMAT: Return ONLY valid JSON in this exact structure (no markdown, no
 
 EXAMPLES:
 User: "Check train G100" → {"intent": "query_ticket", "parameters": {"train_id": "G100"}, "missing_parameters": [], "clarify_question": ""}
-User: "Book ticket for D200" → {"intent": "book_ticket", "parameters": {"train_id": "D200"}, "missing_parameters": [], "clarify_question": ""}
+User: "Book ticket for D200" → {"intent": "book_ticket", "parameters": {"train_id": "D200"}, "missing_parameters": ["user_id"], "clarify_question": "Please provide your user ID to book the ticket."}
+User: "Book G102 for me. my user id is 4343" → {"intent": "book_ticket", "parameters": {"train_id": "G102", "user_id": "4343"}, "missing_parameters": [], "clarify_question": ""}
 User: "Find trains to Shanghai" → {"intent": "search_trains", "parameters": {"to": "Shanghai"}, "missing_parameters": [], "clarify_question": ""}
 User: "Book a ticket" → {"intent": "book_ticket", "parameters": {}, "missing_parameters": ["train_id"], "clarify_question": "Which train would you like to book? Please provide the train ID or tell me your travel details."}
-User: "Show my bookings" → {"intent": "my_tickets", "parameters": {}, "missing_parameters": [], "clarify_question": ""}
+User: "Show my bookings" → {"intent": "my_tickets", "parameters": {}, "missing_parameters": ["user_id"], "clarify_question": "Please provide your user ID to view your tickets."}
 
 If you cannot understand the user's intent at all, set intent to "unknown" and leave other fields empty.
 
@@ -240,10 +242,12 @@ func (a *BookingAgent) executeAction(intentResp *IntentResponse) string {
 		return a.queryTrain(trainID)
 	case "book_ticket":
 		trainID := intentResp.Parameters["train_id"]
-		return a.bookTicket(trainID)
+		userID := intentResp.Parameters["user_id"]
+		return a.bookTicket(trainID, userID)
 	case "cancel_ticket":
 		trainID := intentResp.Parameters["train_id"]
-		return a.cancelTicket(trainID)
+		userID := intentResp.Parameters["user_id"]
+		return a.cancelTicket(trainID, userID)
 	case "list_trains":
 		return a.listTrains()
 	case "search_trains":
@@ -252,7 +256,8 @@ func (a *BookingAgent) executeAction(intentResp *IntentResponse) string {
 		date := intentResp.Parameters["date"]
 		return a.searchTrains(from, to, date)
 	case "my_tickets":
-		return a.getUserTickets()
+		userID := intentResp.Parameters["user_id"]
+		return a.getUserTickets(userID)
 	case "unknown":
 		return "❌ I didn't understand your request. Please try asking to query, book, cancel, search for trains, or list all trains."
 	default:
@@ -288,15 +293,21 @@ func (a *BookingAgent) queryTrain(trainID string) string {
 		train.ID, train.From, train.To, train.Date, train.DepartureTime, train.ArrivalTime, train.Available, train.TotalTickets)
 }
 
-func (a *BookingAgent) bookTicket(trainID string) string {
+func (a *BookingAgent) bookTicket(trainID string, userID string) string {
 	if trainID == "" {
 		return "❌ Please specify a train ID to book (e.g., G100, D200, K300)"
+	}
+
+	// Use provided userID, fallback to agent's default if empty
+	effectiveUserID := userID
+	if effectiveUserID == "" {
+		effectiveUserID = a.userID
 	}
 
 	// Debug logging - remove this in production
 	fmt.Printf("🔍 Debug - Booking train ID: %q (length: %d)\n", trainID, len(trainID))
 
-	url := fmt.Sprintf("%s/book?id=%s&user_id=%s", a.serverURL, trainID, a.userID)
+	url := fmt.Sprintf("%s/book?id=%s&user_id=%s", a.serverURL, trainID, effectiveUserID)
 	fmt.Printf("🔍 Debug - Request URL: %q\n", url)
 
 	resp, err := http.Get(url)
@@ -322,15 +333,21 @@ func (a *BookingAgent) bookTicket(trainID string) string {
 		return fmt.Sprintf("❌ Error: %s", resp.Status)
 	}
 
-	return fmt.Sprintf("✅ Successfully booked ticket for train %s!", trainID)
+	return fmt.Sprintf("✅ Successfully booked ticket for train %s for user %s!", trainID, effectiveUserID)
 }
 
-func (a *BookingAgent) cancelTicket(trainID string) string {
+func (a *BookingAgent) cancelTicket(trainID string, userID string) string {
 	if trainID == "" {
 		return "❌ Please specify a train ID to cancel (e.g., G100, D200, K300)"
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/cancel?id=%s&user_id=%s", a.serverURL, trainID, a.userID))
+	// Use provided userID, fallback to agent's default if empty
+	effectiveUserID := userID
+	if effectiveUserID == "" {
+		effectiveUserID = a.userID
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/cancel?id=%s&user_id=%s", a.serverURL, trainID, effectiveUserID))
 	if err != nil {
 		return fmt.Sprintf("❌ Error canceling ticket: %v", err)
 	}
@@ -436,8 +453,14 @@ type UserBooking struct {
 	Count   int    `json:"count"`
 }
 
-func (a *BookingAgent) getUserTickets() string {
-	resp, err := http.Get(fmt.Sprintf("%s/user/tickets?user_id=%s", a.serverURL, a.userID))
+func (a *BookingAgent) getUserTickets(userID string) string {
+	// Use provided userID, fallback to agent's default if empty
+	effectiveUserID := userID
+	if effectiveUserID == "" {
+		effectiveUserID = a.userID
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/user/tickets?user_id=%s", a.serverURL, effectiveUserID))
 	if err != nil {
 		return fmt.Sprintf("❌ Error fetching your tickets: %v", err)
 	}
