@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: git config --global url.https://${{ secrets.GITPAT }}@github.com/.insteadOf https://github.com/
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6.0.1
+        uses: golangci/golangci-lint-action@v8.0.0
         with:
           only-new-issues: true
           args: --timeout=10m --verbose
